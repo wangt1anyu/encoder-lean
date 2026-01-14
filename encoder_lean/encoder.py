@@ -1,8 +1,12 @@
 """Main encoder module for Lean code."""
 
+import logging
 import torch
 from transformers import AutoTokenizer, AutoModel
 from typing import List, Union, Optional
+
+# Get logger
+logger = logging.getLogger(__name__)
 
 
 class LeanEncoder:
@@ -11,7 +15,8 @@ class LeanEncoder:
     def __init__(
         self,
         model_name: str = "microsoft/codebert-base",
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        log_file: Optional[str] = None
     ):
         """
         Initialize the Lean encoder.
@@ -19,24 +24,35 @@ class LeanEncoder:
         Args:
             model_name: Name of the pre-trained model to use
             device: Device to run the model on ('cuda', 'cpu', or None for auto)
+            log_file: Optional path to log file for monitoring
         """
         self.model_name = model_name
+        
+        # Set up logging if log_file is provided
+        if log_file:
+            from encoder_lean.logger import setup_logger
+            setup_logger("encoder_lean", log_file=log_file, console_output=True)
+            logger.info(f"Logging initialized. Log file: {log_file}")
         
         # Determine device
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Auto-detected device: {self.device}")
         else:
             self.device = device
             if device.startswith("cuda") and not torch.cuda.is_available():
-                raise RuntimeError(f"CUDA device '{device}' requested but CUDA is not available")
+                error_msg = f"CUDA device '{device}' requested but CUDA is not available"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            logger.info(f"Using specified device: {self.device}")
         
         # Load tokenizer and model
-        print(f"Loading model '{model_name}'...")
+        logger.info(f"Loading model '{model_name}'...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
         self.model.to(self.device)
         self.model.eval()
-        print(f"Model loaded on device: {self.device}")
+        logger.info(f"Model '{model_name}' loaded successfully on device: {self.device}")
     
     def encode(
         self,
@@ -59,6 +75,9 @@ class LeanEncoder:
         if isinstance(lean_code, str):
             lean_code = [lean_code]
         
+        batch_size = len(lean_code)
+        logger.debug(f"Encoding {batch_size} example(s) with max_length={max_length}")
+        
         # Tokenize
         encoded = self.tokenizer(
             lean_code,
@@ -80,6 +99,7 @@ class LeanEncoder:
         if not return_tensors:
             embeddings = embeddings.cpu().numpy()
         
+        logger.debug(f"Encoded {batch_size} example(s). Output shape: {embeddings.shape}")
         return embeddings
     
     def encode_with_pooling(
@@ -101,6 +121,9 @@ class LeanEncoder:
         """
         if isinstance(lean_code, str):
             lean_code = [lean_code]
+        
+        batch_size = len(lean_code)
+        logger.debug(f"Encoding {batch_size} example(s) with pooling='{pooling}', max_length={max_length}")
         
         encoded = self.tokenizer(
             lean_code,
@@ -126,6 +149,9 @@ class LeanEncoder:
                 attention_mask = encoded["attention_mask"].unsqueeze(-1)
                 embeddings = (hidden_states * attention_mask).max(1)[0]
             else:
-                raise ValueError(f"Unknown pooling strategy: {pooling}")
+                error_msg = f"Unknown pooling strategy: {pooling}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
         
+        logger.debug(f"Encoded {batch_size} example(s) with pooling='{pooling}'. Output shape: {embeddings.shape}")
         return embeddings.cpu().numpy()
